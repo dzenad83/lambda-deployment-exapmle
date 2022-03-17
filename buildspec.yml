@@ -1,0 +1,67 @@
+version: 0.2
+
+env:
+  git-credential-helper: yes
+  variables:
+
+    #LAMBDAS
+    # LAMBDA1: lambda-function-cognito-custom-message-${Project_Name}-${Env}
+    # PATH1: "cognito_custom_message"
+    # LAMBDA2: lambda-alarm-subscriber-sensor-readings-${Project_Name}-${Env}
+    # PATH2: "alarm_subscriber_sensor_readings"
+
+    # CONDITIONS
+    CONDITION1: git diff --raw ${Commit_ID} HEAD | grep "$FILE1"
+    CONDITION2: git diff --raw ${Commit_ID} HEAD | grep "$PATH1"
+    CONDITION3: git diff --raw ${Commit_ID} HEAD | grep "$PATH2"
+
+    #COMMANDS
+    #Cognito custom message
+    COMMAND1: "cd $PATH1 \
+               && export PAYLOAD_NAME=$LAMBDA1 \
+               && ./build.sh && mv dist/$LAMBDA1.zip $LAMBDA1.zip \
+               && aws lambda update-function-code \
+                --function-name  $LAMBDA1 \
+                --zip-file fileb://$LAMBDA1.zip --publish || exit 1"
+    #Cognito post confirmation
+    COMMAND2: "cd $PATH2 && PAYLOAD_NAME=${LAMBDA2} make zip \
+               && aws lambda update-function-code \
+                --function-name  $LAMBDA2 \
+                --zip-file fileb://dist/$LAMBDA2.zip --publish || exit 1"
+
+    NO_CHANGE_MESSAGE: "echo No changes, Skipping upload..."
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+
+    commands:
+      - rm -rf *
+      - pip install --upgrade pip
+      - npm install -g @maizzle/cli
+      - git clone --single-branch --branch ${CB_Branch} ${Git_Repository}
+      - cd serverless-functions
+      - Root_Path=$(pwd)
+      - Git_Tag=$(git rev-parse HEAD)
+  pre_build:
+    commands:
+      # CONDITION FOR DEPLOYMENT OF ALL LAMBDAS
+      - FILE1=buildspec.yml
+      - LAMBDA1=lambda-function-cognito-custom-message-${Project_Name}-${Env}
+      - PATH1=cognito_custom_message
+      - LAMBDA2=lambda-alarm-subscriber-sensor-readings-${Project_Name}-${Env}
+      - PATH2=alarm_subscriber_sensor_readings
+  build:
+    commands:
+      #GLOBAL BUILD COMMANDS
+      #START OF SERVICE BASED DEPLOYMENT
+      - echo "--------------------------------------------------------------------"
+      - echo "--------------------------------------------------------------------"
+      - echo "#########################DEPLOYING LAMBDA1######################################"
+      - if eval $CONDITION1 || eval $CONDITION2 ; then eval $COMMAND1; else eval $NO_CHANGE_MESSAGE; fi
+      - cd $Root_Path
+      - echo "--------------------------------------------------------------------"
+      - echo "#########################DEPLOYING LAMBDA2######################################"
+      - if eval $CONDITION1 || eval $CONDITION3 ; then eval $COMMAND2; else eval $NO_CHANGE_MESSAGE; fi
+      - cd $Root_Path
+      - aws ssm put-parameter --name "git-commit-id-${Project_Name}-${Env}" --type "String" --value $Git_Tag --overwrite
